@@ -1,5 +1,5 @@
 
-name: Run Repository Commands
+name: Install AIOZ DePIN
 
 on:
   workflow_dispatch:
@@ -8,22 +8,31 @@ permissions:
   contents: read
 
 jobs:
-  run-commands:
+  install-aioz:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify command file
+      - name: Install dependencies
         run: |
-          if [ ! -f commands.txt ]; then
-            echo "ERROR: commands.txt was not found"
-            exit 1
-          fi
+          sudo apt-get update
+          sudo apt-get install -y curl tar
+
+      - name: Download AIOZ DePIN
+        run: |
+          curl -LO https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
+          tar -xzf aioz-depin-linux-amd64-1.2.6.tar.gz
+          mv aioz-depin-cli-linux-amd64 aioz-depin-cli
+          chmod +x aioz-depin-cli
+
+      - name: Verify installation
+        run: |
+          ./aioz-depin-cli version
 
       - name: Run commands from commands.txt
-        shell: bash
         run: |
-          set -euo pipefail
-          bash -euo pipefail commands.txt
+          if [ -f commands.txt ]; then
+            bash -euo pipefail commands.txt
+          fi
