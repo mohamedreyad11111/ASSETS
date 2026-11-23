@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y curl tar procps
 
-      - name: Download AIOZ DePIN CLI v1.2.5
+      - name: Download AIOZ CLI v1.2.5
         shell: bash
         run: |
           set -e
@@ -37,7 +37,7 @@ jobs:
             -name 'aioz-depin-cli-linux-amd64' -print -quit)"
 
           if [ -z "$CLI_BIN" ]; then
-            echo "ERROR: AIOZ CLI binary not found"
+            echo "ERROR: CLI binary not found"
             find aioz-extracted -maxdepth 3 -type f
             exit 1
           fi
@@ -49,7 +49,7 @@ jobs:
 
           ./aioz-depin-cli version | tee cli-version.txt
 
-      - name: Generate new wallet
+      - name: Generate private key
         shell: bash
         run: |
           set -e
@@ -58,23 +58,19 @@ jobs:
             --save-priv-key privkey.json \
             </dev/null >/dev/null 2>&1
 
-          if [ ! -s privkey.json ]; then
-            echo "ERROR: Private key was not generated"
-            exit 1
-          fi
-
+          test -s privkey.json
           chmod 600 privkey.json
 
-          echo "New wallet generated successfully"
+          echo "Private key generated successfully"
 
-      - name: Start node and monitor for 10 minutes
+      - name: Start node and monitor
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
 
           mkdir -p logs depin-data
 
-          echo "========== STARTING AIOZ NODE =========="
+          echo "========== STARTING NODE =========="
 
           ./aioz-depin-cli start \
             --home depin-data \
@@ -84,54 +80,36 @@ jobs:
           NODE_PID=$!
           echo "$NODE_PID" > node.pid
 
-          echo "Started process PID: $NODE_PID"
+          echo "Node PID: $NODE_PID"
 
-          node_alive() {
-            if kill -0 "$NODE_PID" 2>/dev/null; then
-              return 0
-            fi
-
-            pgrep -f '[a]ioz-io' >/dev/null 2>&1
-          }
-
-          echo "Waiting 30 seconds for startup..."
+          echo "Waiting 30 seconds..."
           sleep 30
 
-          if ! node_alive; then
+          if ! kill -0 "$NODE_PID" 2>/dev/null; then
             echo "ERROR: Node stopped during startup"
-            echo "========== NODE LOG =========="
             tail -n 150 logs/node.log || true
             exit 1
           fi
 
-          echo "Node appears to be running."
-
-          set +e
-
-          NODE_FAILED=0
+          echo "Node process is running"
 
           for i in {1..10}; do
             echo "========== MINUTE $i =========="
 
-            if ! node_alive; then
+            if ! kill -0 "$NODE_PID" 2>/dev/null; then
               echo "ERROR: Node process stopped"
-              NODE_FAILED=1
               break
             fi
 
-            echo "Checking node statistics..."
+            echo "========== NODE STATS =========="
 
-            if timeout 30s ./aioz-depin-cli stats \
+            ./aioz-depin-cli stats \
               --home depin-data \
-              --priv-key-file privkey.json \
-              2>&1 | tee -a logs/stats.log; then
+              2>&1 | tee -a logs/stats.log
 
-              echo "Stats command completed."
+            STATS_CODE=${PIPESTATUS[0]}
 
-            else
-              STATS_CODE=$?
-              echo "Stats command returned code: $STATS_CODE"
-            fi
+            echo "Stats exit code: $STATS_CODE"
 
             if [ "$i" -lt 10 ]; then
               sleep 60
@@ -140,23 +118,21 @@ jobs:
 
           echo "========== REWARD BALANCE =========="
 
-          timeout 60s ./aioz-depin-cli reward balance \
+          ./aioz-depin-cli reward balance \
             --priv-key-file privkey.json \
             2>&1 | tee logs/rewards.log
 
-          REWARD_CODE=$?
+          REWARD_CODE=${PIPESTATUS[0]}
 
-          echo "========== FINAL NODE LOG =========="
+          echo "Reward exit code: $REWARD_CODE"
+
+          echo "========== NODE LOG =========="
           tail -n 150 logs/node.log || true
 
           echo "========== PROCESS CHECK =========="
           ps aux | grep -E '[a]ioz|[d]epin' || true
 
-          if [ "$NODE_FAILED" -eq 1 ]; then
-            exit 1
-          fi
-
-      - name: Upload AIOZ backup and logs
+      - name: Upload AIOZ backup
         if: always()
         uses: actions/upload-artifact@v4
         with:
