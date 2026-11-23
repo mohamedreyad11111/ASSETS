@@ -53,15 +53,38 @@ jobs:
 
           echo $! > node.pid
 
+      - name: Check Node Startup
+        run: |
+          sleep 30
+
+          echo "========== Node Process =========="
+
+          if kill -0 "$(cat node.pid)" 2>/dev/null; then
+            echo "Node process is running."
+          else
+            echo "Node process has stopped."
+          fi
+
+          echo "========== Startup Logs =========="
+          tail -n 100 logs/node.log || true
+
       - name: Monitor Node
         run: |
           for i in {1..10}; do
             echo "========== Minute $i =========="
 
-            ./aioz-depin-cli stats \
-              --home depin-data \
-              --priv-key-file privkey.json \
-              2>&1 | tee -a logs/stats.log || true
+            if kill -0 "$(cat node.pid)" 2>/dev/null; then
+              echo "Node process is running."
+
+              ./aioz-depin-cli stats \
+                --home depin-data \
+                --priv-key-file privkey.json \
+                2>&1 | tee -a logs/stats.log || true
+            else
+              echo "Node process is not running."
+              tail -n 100 logs/node.log || true
+              break
+            fi
 
             if [ "$i" -lt 10 ]; then
               sleep 60
