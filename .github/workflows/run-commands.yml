@@ -1,0 +1,29 @@
+
+name: Run Repository Commands
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run-commands:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify command file
+        run: |
+          if [ ! -f commands.txt ]; then
+            echo "ERROR: commands.txt was not found"
+            exit 1
+          fi
+
+      - name: Run commands from commands.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -euo pipefail commands.txt
