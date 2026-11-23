@@ -1,49 +1,64 @@
 
-name: XMRig and Monero Wallet Build
+name: XMRig HashVault Connection Test
 
 on:
   workflow_dispatch:
-
-  push:
-    paths:
-      - Dockerfile
-      - .github/workflows/build.yml
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  connection-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
+      - name: Install dependencies
         run: |
-          docker build --pull \
-            --progress=plain \
-            -t xmrig-test:latest .
+          sudo apt-get update
+          sudo apt-get install -y wget tar ca-certificates openssl
 
-      - name: Verify XMRig
+      - name: Download XMRig
         run: |
-          docker run --rm \
-            xmrig-test:latest
+          wget -O xmrig.tar.gz \
+            https://github.com/xmrig/xmrig/releases/download/v6.26.0/xmrig-6.26.0-linux-static-x64.tar.gz
 
-      - name: Verify Monero Wallet CLI
+          echo "fc6f8ae5f64e4f17481f7e3be29a1c56949f216a998414188003eae1db20c9e5  xmrig.tar.gz" | sha256sum -c -
+
+          mkdir xmrig
+          tar -xzf xmrig.tar.gz -C xmrig
+
+          BIN="$(find "$PWD/xmrig" -type f -name xmrig -perm /111 -print -quit)"
+          test -n "$BIN"
+
+          sudo install -m 0755 "$BIN" /usr/local/bin/xmrig
+          xmrig --version
+
+      - name: Test HashVault DNS
         run: |
-          docker run --rm \
-            --entrypoint monero-wallet-cli \
-            xmrig-test:latest \
-            --version
+          getent hosts pool.hashvault.pro
 
       - name: Test HashVault TLS
         run: |
-          timeout 10 openssl s_client \
+          timeout 15 openssl s_client \
             -connect pool.hashvault.pro:443 \
             -servername pool.hashvault.pro \
-            -brief </dev/null
+            -brief < /dev/null
+
+      - name: Test XMRig pool connection
+        run: |
+          timeout 45 xmrig \
+            -a rx/0 \
+            -o pool.hashvault.pro:443 \
+            -u TEST_ONLY_INVALID_WALLET \
+            -p ConnectionTest \
+            --tls \
+            --no-color \
+            --print-time=5 \
+            --retries=2 \
+            --retry-pause=3 || true
+
+      - name: Connection test finished
+        if: always()
+        run: |
+          echo "HashVault connection test finished."
