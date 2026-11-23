@@ -1,5 +1,5 @@
 
-name: AIOZ DePIN Node
+name: AIOZ DePIN Test
 
 on:
   workflow_dispatch:
@@ -8,63 +8,91 @@ permissions:
   contents: read
 
 jobs:
-  aioz-node:
-    runs-on: [self-hosted, linux, aioz-node]
+  install-aioz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y curl tar
 
-      - name: Install AIOZ CLI
+      - name: Download AIOZ DePIN
         run: |
-          sudo mkdir -p /opt/aioz
-          cd /tmp
-
-          curl -fL -o aioz.tar.gz \
+          curl -fL -o aioz-depin.tar.gz \
             https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
 
-          tar -xzf aioz.tar.gz
+          tar -xzf aioz-depin.tar.gz
+          mv aioz-depin-cli-linux-amd64 aioz-depin-cli
+          chmod +x aioz-depin-cli
 
-          sudo install -m 755 \
-            aioz-depin-cli-linux-amd64 \
-            /opt/aioz/aioz-depin-cli
-
-          /opt/aioz/aioz-depin-cli version
-
-      - name: Check wallet
+      - name: Verify installation
         run: |
-          if [ ! -f /etc/aioz/privkey.json ]; then
-            echo "Wallet file missing: /etc/aioz/privkey.json"
+          ./aioz-depin-cli version
+
+      - name: Prepare node key
+        env:
+          AIOZ_KEY: ${{ secrets.AIOZ_PRIVATE_KEY_JSON }}
+        run: |
+          test -n "$AIOZ_KEY" || {
+            echo "AIOZ_PRIVATE_KEY_JSON secret is missing"
             exit 1
-          fi
+          }
 
-      - name: Configure AIOZ service
+          mkdir -p "$HOME/.aioz"
+          printf '%s' "$AIOZ_KEY" > "$HOME/.aioz/privkey.json"
+          chmod 600 "$HOME/.aioz/privkey.json"
+
+      - name: Start node and monitor
         run: |
-          sudo mkdir -p /var/lib/aioz/depin-data
+          mkdir -p depin-data logs
 
-          sudo tee /etc/systemd/system/aioz-depin.service > /dev/null <<'EOF'
-          [Unit]
-          Description=AIOZ DePIN Node
-          After=network-online.target
-          Wants=network-online.target
+          ./aioz-depin-cli start \
+            --home depin-data \
+            --priv-key-file "$HOME/.aioz/privkey.json" \
+            > logs/node.log 2>&1 &
 
-          [Service]
-          Type=simple
-          ExecStart=/opt/aioz/aioz-depin-cli start --home /var/lib/aioz/depin-data --priv-key-file /etc/aioz/privkey.json
-          Restart=always
-          RestartSec=30
-          RuntimeMaxSec=5h30min
+          NODE_PID=$!
+          echo "$NODE_PID" > logs/node.pid
 
-          [Install]
-          WantedBy=multi-user.target
-          EOF
+          cleanup() {
+            kill "$NODE_PID" 2>/dev/null || true
+            wait "$NODE_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
 
-          sudo systemctl daemon-reload
-          sudo systemctl enable aioz-depin
-          sudo systemctl restart aioz-depin
+          for i in $(seq 1 10); do
+            echo "================================"
+            echo "AIOZ status check: minute $i"
+            date -u
 
-      - name: Check service
-        run: |
-          sudo systemctl status aioz-depin --no-pager
+            ./aioz-depin-cli stats 2>&1 | tee -a logs/stats.log || true
+
+            echo "Node process:"
+            if kill -0 "$NODE_PID" 2>/dev/null; then
+              echo "RUNNING"
+            else
+              echo "STOPPED"
+              cat logs/node.log
+              exit 1
+            fi
+
+            if [ "$i" -lt 10 ]; then
+              sleep 60
+            fi
+          done
+
+      - name: Save node data and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aioz-node-test-data
+          path: |
+            depin-data/
+            logs/
+          retention-days: 7
+          if-no-files-found: warn
