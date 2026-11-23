@@ -1,3 +1,4 @@
+
 name: Install AIOZ DePIN
 
 on:
@@ -21,8 +22,10 @@ jobs:
 
       - name: Download AIOZ DePIN
         run: |
-          curl -LO https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
-          tar -xzf aioz-depin-linux-amd64-1.2.6.tar.gz
+          curl -fL -o aioz-depin.tar.gz \
+            https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
+
+          tar -xzf aioz-depin.tar.gz
           mv aioz-depin-cli-linux-amd64 aioz-depin-cli
           chmod +x aioz-depin-cli
 
@@ -32,25 +35,59 @@ jobs:
 
       - name: Generate Private Key
         run: |
-          ./aioz-depin-cli keytool new --save-priv-key privkey.json
+          ./aioz-depin-cli keytool new \
+            --save-priv-key privkey.json \
+            </dev/null >/dev/null 2>&1
+
+          test -s privkey.json
           chmod 600 privkey.json
 
       - name: Start AIOZ Node
         run: |
           mkdir -p logs
+
           ./aioz-depin-cli start \
             --home depin-data \
             --priv-key-file privkey.json \
             > logs/node.log 2>&1 &
+
           echo $! > node.pid
 
       - name: Monitor Node
         run: |
           for i in {1..10}; do
-            echo "===== Minute $i ====="
-            ./aioz-depin-cli stats || true
-            sleep 60
+            echo "========== Minute $i =========="
+
+            ./aioz-depin-cli stats \
+              --home depin-data \
+              --priv-key-file privkey.json \
+              2>&1 | tee -a logs/stats.log || true
+
+            if [ "$i" -lt 10 ]; then
+              sleep 60
+            fi
           done
+
+      - name: Check AIOZ Reward Balance
+        if: always()
+        run: |
+          echo "========== AIOZ Reward Balance =========="
+
+          if [ -f privkey.json ]; then
+            ./aioz-depin-cli reward balance \
+              --priv-key-file privkey.json \
+              2>&1 | tee logs/rewards.log || true
+          else
+            echo "Private key file not found."
+          fi
+
+      - name: Show Node Logs
+        if: always()
+        run: |
+          if [ -f logs/node.log ]; then
+            echo "========== Node Logs =========="
+            tail -n 100 logs/node.log
+          fi
 
       - name: Upload Node Files
         if: always()
