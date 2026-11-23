@@ -1,5 +1,5 @@
 
-name: AIOZ DePIN Test
+name: AIOZ DePIN Node Test
 
 on:
   workflow_dispatch:
@@ -14,90 +14,42 @@ jobs:
 
     steps:
       - name: Install dependencies
+        shell: bash
         run: |
+          set -e
           sudo apt-get update
-          sudo apt-get install -y curl tar
+          sudo apt-get install -y curl tar procps
 
-      - name: Download AIOZ CLI v1.2.6 and v1.2.5
+      - name: Download AIOZ DePIN CLI v1.2.5
         shell: bash
         run: |
           set -e
 
-          mkdir -p aioz-v126 aioz-v125
-
           curl -fL \
-            https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz \
-            -o aioz-v126.tar.gz
+            "https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.5/aioz-depin-linux-amd64-1.2.5.tar.gz" \
+            -o aioz-depin.tar.gz
 
-          curl -fL \
-            https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.5/aioz-depin-linux-amd64-1.2.5.tar.gz \
-            -o aioz-v125.tar.gz
+          mkdir -p aioz-extracted
 
-          tar -xzf aioz-v126.tar.gz -C aioz-v126
-          tar -xzf aioz-v125.tar.gz -C aioz-v125
+          tar -xzf aioz-depin.tar.gz -C aioz-extracted
 
-          CLI=$(find aioz-v126 -type f -name 'aioz-depin-cli*' | head -n 1)
+          CLI_BIN="$(find aioz-extracted -type f \
+            -name 'aioz-depin-cli-linux-amd64' -print -quit)"
 
-          if [ -z "$CLI" ]; then
-            echo "ERROR: v1.2.6 CLI binary not found"
+          if [ -z "$CLI_BIN" ]; then
+            echo "ERROR: AIOZ CLI binary not found"
+            find aioz-extracted -maxdepth 3 -type f
             exit 1
           fi
 
-          cp "$CLI" ./aioz-depin-cli
+          cp "$CLI_BIN" ./aioz-depin-cli
           chmod +x ./aioz-depin-cli
 
-          echo "v1.2.6 CLI installed"
-          ./aioz-depin-cli version
+          mkdir -p logs
 
-      - name: Prepare temporary encryption workaround
-        shell: bash
-        run: |
-          set -e
+          ./aioz-depin-cli version | tee cli-version.txt
 
-          OLD_IO=$(find aioz-v125 -type f -name 'aioz-io' | head -n 1)
-          NEW_IO=$(find aioz-v126 -type f -name 'aioz-io' | head -n 1)
-
-          if [ -z "$OLD_IO" ]; then
-            echo "ERROR: aioz-io was not found in v1.2.5 archive"
-            find aioz-v125 -maxdepth 4 -type f
-            exit 1
-          fi
-
-          if [ -z "$NEW_IO" ]; then
-            echo "ERROR: aioz-io was not found in v1.2.6 archive"
-            find aioz-v126 -maxdepth 4 -type f
-            exit 1
-          fi
-
-          mkdir -p "$RUNNER_TEMP/aioz-wrapper"
-
-          cp "$OLD_IO" "$RUNNER_TEMP/aioz-wrapper/aioz-io-v125"
-          cp "$NEW_IO" "$RUNNER_TEMP/aioz-wrapper/aioz-io-v126"
-
-          chmod +x "$RUNNER_TEMP/aioz-wrapper/aioz-io-v125"
-          chmod +x "$RUNNER_TEMP/aioz-wrapper/aioz-io-v126"
-
-          cat > "$RUNNER_TEMP/aioz-wrapper/aioz-io" <<'EOF'
-          #!/usr/bin/env bash
-          set -e
-
-          OLD="$RUNNER_TEMP/aioz-wrapper/aioz-io-v125"
-          NEW="$RUNNER_TEMP/aioz-wrapper/aioz-io-v126"
-
-          if [[ "${1:-}" == "keytool" && "${2:-}" == "encrypt" ]]; then
-            exec "$OLD" "$@"
-          else
-            exec "$NEW" "$@"
-          fi
-          EOF
-
-          chmod +x "$RUNNER_TEMP/aioz-wrapper/aioz-io"
-
-          echo "$RUNNER_TEMP/aioz-wrapper" >> "$GITHUB_PATH"
-
-          echo "Temporary aioz-io wrapper prepared"
-
-      - name: Generate private key
+      - name: Generate new wallet
         shell: bash
         run: |
           set -e
@@ -106,20 +58,25 @@ jobs:
             --save-priv-key privkey.json \
             </dev/null >/dev/null 2>&1
 
-          test -s privkey.json
+          if [ ! -s privkey.json ]; then
+            echo "ERROR: Private key was not generated"
+            exit 1
+          fi
+
           chmod 600 privkey.json
 
-          echo "Private key generated successfully"
+          echo "New wallet generated successfully"
 
       - name: Start node and monitor for 10 minutes
         shell: bash
         run: |
-          mkdir -p logs
-          set +e
+          set -euo pipefail
 
-          echo "========== Starting AIOZ Node =========="
+          mkdir -p logs depin-data
 
-          nohup ./aioz-depin-cli start \
+          echo "========== STARTING AIOZ NODE =========="
+
+          ./aioz-depin-cli start \
             --home depin-data \
             --priv-key-file privkey.json \
             > logs/node.log 2>&1 &
@@ -127,50 +84,76 @@ jobs:
           NODE_PID=$!
           echo "$NODE_PID" > node.pid
 
-          echo "Node PID: $NODE_PID"
+          echo "Started process PID: $NODE_PID"
 
+          node_alive() {
+            if kill -0 "$NODE_PID" 2>/dev/null; then
+              return 0
+            fi
+
+            pgrep -f '[a]ioz-io' >/dev/null 2>&1
+          }
+
+          echo "Waiting 30 seconds for startup..."
           sleep 30
 
-          if ! kill -0 "$NODE_PID" 2>/dev/null; then
-            echo "Node stopped during startup"
-            tail -n 150 logs/node.log
-          else
-            echo "Node process is still running"
-
-            for i in {1..10}; do
-              echo "========== Minute $i =========="
-
-              if ! kill -0 "$NODE_PID" 2>/dev/null; then
-                echo "Node process stopped"
-                break
-              fi
-
-              ./aioz-depin-cli stats \
-                --home depin-data \
-                --priv-key-file privkey.json \
-                2>&1 | tee -a logs/stats.log
-
-              if [ "$i" -lt 10 ]; then
-                sleep 60
-              fi
-            done
+          if ! node_alive; then
+            echo "ERROR: Node stopped during startup"
+            echo "========== NODE LOG =========="
+            tail -n 150 logs/node.log || true
+            exit 1
           fi
 
-          echo "========== Final Node Logs =========="
+          echo "Node appears to be running."
+
+          set +e
+
+          NODE_FAILED=0
+
+          for i in {1..10}; do
+            echo "========== MINUTE $i =========="
+
+            if ! node_alive; then
+              echo "ERROR: Node process stopped"
+              NODE_FAILED=1
+              break
+            fi
+
+            echo "Checking node statistics..."
+
+            if timeout 30s ./aioz-depin-cli stats \
+              --home depin-data \
+              --priv-key-file privkey.json \
+              2>&1 | tee -a logs/stats.log; then
+
+              echo "Stats command completed."
+
+            else
+              STATS_CODE=$?
+              echo "Stats command returned code: $STATS_CODE"
+            fi
+
+            if [ "$i" -lt 10 ]; then
+              sleep 60
+            fi
+          done
+
+          echo "========== REWARD BALANCE =========="
+
+          timeout 60s ./aioz-depin-cli reward balance \
+            --priv-key-file privkey.json \
+            2>&1 | tee logs/rewards.log
+
+          REWARD_CODE=$?
+
+          echo "========== FINAL NODE LOG =========="
           tail -n 150 logs/node.log || true
 
-      - name: Check reward balance
-        if: always()
-        shell: bash
-        run: |
-          mkdir -p logs
+          echo "========== PROCESS CHECK =========="
+          ps aux | grep -E '[a]ioz|[d]epin' || true
 
-          if [ -s privkey.json ]; then
-            ./aioz-depin-cli reward balance \
-              --priv-key-file privkey.json \
-              2>&1 | tee logs/rewards.log || true
-          else
-            echo "Private key not found"
+          if [ "$NODE_FAILED" -eq 1 ]; then
+            exit 1
           fi
 
       - name: Upload AIOZ backup and logs
@@ -183,5 +166,6 @@ jobs:
             depin-data/
             logs/
             node.pid
+            cli-version.txt
           if-no-files-found: warn
           retention-days: 7
