@@ -13,14 +13,19 @@ RUN apt-get update && apt-get install -y \
     libuv1-dev \
     libssl-dev \
     libhwloc-dev \
-    libsodium-dev \
+    libboost-all-dev \
     libzmq3-dev \
-    libpgm-dev \
-    libnorm-dev \
+    libunbound-dev \
+    libsodium-dev \
     libunwind-dev \
+    libhidapi-dev \
+    libusb-1.0-0-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# Build official XMRig
+# Build XMRig
 WORKDIR /opt/xmrig
 
 RUN git clone --depth 1 \
@@ -29,9 +34,10 @@ RUN git clone --depth 1 \
        -DCMAKE_BUILD_TYPE=Release \
        -DWITH_TLS=ON \
        -DWITH_HWLOC=ON \
-    && cmake --build build --parallel 2
+    && cmake --build build --parallel 2 \
+    && test -x build/xmrig
 
-# Build official Monero Wallet CLI
+# Build Monero Wallet CLI
 WORKDIR /opt/monero
 
 ARG MONERO_VERSION=v0.18.4.3
@@ -40,15 +46,13 @@ RUN git clone --depth 1 \
     --branch ${MONERO_VERSION} \
     https://github.com/monero-project/monero.git . \
     && git submodule update --init --recursive \
-    && make -C build/release -j2 wallet
+    && make -j2 \
+    && test -x build/release/bin/monero-wallet-cli
 
 # Add binaries to PATH
 ENV PATH="/opt/xmrig/build:/opt/monero/build/release/bin:${PATH}"
 
-# Verify both applications exist
-RUN test -x /opt/xmrig/build/xmrig \
-    && test -x /opt/monero/build/release/bin/monero-wallet-cli
-
+# Wallet data directory
 WORKDIR /data
 
 # Default command
