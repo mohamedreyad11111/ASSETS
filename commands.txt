@@ -1,0 +1,15 @@
+
+# Linux commands to execute
+
+echo "Command file was read successfully."
+
+echo "System information:"
+uname -a
+
+echo "Current user:"
+whoami
+
+echo "Available disk space:"
+df -h
+
+# Add your commands below
