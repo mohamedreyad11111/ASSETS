@@ -1,5 +1,5 @@
 
-name: AIOZ DePIN Node Test
+name: AIOZ DePIN 40 Minute Test
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
 jobs:
   aioz-node:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     steps:
       - name: Install dependencies
@@ -18,7 +18,7 @@ jobs:
         run: |
           set -e
           sudo apt-get update
-          sudo apt-get install -y curl tar procps
+          sudo apt-get install -y curl tar procps coreutils
 
       - name: Download AIOZ CLI v1.2.5
         shell: bash
@@ -63,14 +63,22 @@ jobs:
 
           echo "Private key generated successfully"
 
-      - name: Start node and monitor
+      - name: Start node and monitor for 40 minutes
         shell: bash
         run: |
           set -u
 
           mkdir -p logs depin-data
 
-          echo "========== STARTING NODE =========="
+          MAX_BYTES=$((2 * 1024 * 1024 * 1024))
+          INTERVALS=240
+
+          echo "========== STORAGE CONFIGURATION =========="
+          echo "Maximum monitored folder size: 2 GiB"
+          echo "Monitoring interval: 10 seconds"
+          echo "Test duration: approximately 40 minutes"
+
+          echo "========== STARTING AIOZ NODE =========="
 
           ./aioz-depin-cli start \
             --home depin-data \
@@ -82,7 +90,7 @@ jobs:
 
           echo "Node PID: $NODE_PID"
 
-          echo "Waiting 30 seconds..."
+          echo "Waiting 30 seconds for startup..."
           sleep 30
 
           if ! kill -0 "$NODE_PID" 2>/dev/null; then
@@ -93,50 +101,95 @@ jobs:
 
           echo "Node process is running"
 
-          for i in {1..10}; do
-            echo "========== MINUTE $i =========="
+          STORAGE_LIMIT_REACHED=0
+          NODE_STOPPED=0
+
+          for ((i=1; i<=INTERVALS; i++)); do
 
             if ! kill -0 "$NODE_PID" 2>/dev/null; then
               echo "ERROR: Node process stopped"
+              NODE_STOPPED=1
               break
             fi
 
-            echo "========== NODE STATS =========="
+            USED_BYTES=$(du -sb depin-data 2>/dev/null | awk '{print $1}')
+            USED_BYTES=${USED_BYTES:-0}
 
-            ./aioz-depin-cli stats \
-              --home depin-data \
-              2>&1 | tee -a logs/stats.log
+            echo "Storage used: $USED_BYTES bytes"
 
-            STATS_CODE=${PIPESTATUS[0]}
-
-            echo "Stats exit code: $STATS_CODE"
-
-            if [ "$i" -lt 10 ]; then
-              sleep 60
+            if [ "$USED_BYTES" -ge "$MAX_BYTES" ]; then
+              echo "STORAGE LIMIT REACHED: 2 GiB"
+              STORAGE_LIMIT_REACHED=1
+              break
             fi
+
+            if (( i % 6 == 0 )); then
+              MINUTE=$((i / 6))
+
+              echo "========== MINUTE $MINUTE / 40 =========="
+              echo "========== NODE STATS =========="
+
+              ./aioz-depin-cli stats \
+                --home depin-data \
+                2>&1 | tee -a logs/stats.log
+
+              STATS_CODE=${PIPESTATUS[0]}
+              echo "Stats exit code: $STATS_CODE"
+
+              echo "========== STORAGE USAGE =========="
+              echo "$USED_BYTES / $MAX_BYTES bytes"
+            fi
+
+            sleep 10
           done
+
+          echo "========== MONITORING FINISHED =========="
+
+          if [ "$STORAGE_LIMIT_REACHED" -eq 1 ]; then
+            echo "Node stopped because monitored data reached 2 GiB"
+          elif [ "$NODE_STOPPED" -eq 1 ]; then
+            echo "Node stopped unexpectedly"
+          else
+            echo "40-minute monitoring period completed"
+          fi
+
+          echo "========== FINAL NODE STATS =========="
+
+          ./aioz-depin-cli stats \
+            --home depin-data \
+            2>&1 | tee logs/final-stats.log
 
           echo "========== REWARD BALANCE =========="
 
           ./aioz-depin-cli reward balance \
-            --priv-key-file privkey.json \
+            --home depin-data \
+            --endpoint http://127.0.0.1:1317 \
             2>&1 | tee logs/rewards.log
 
           REWARD_CODE=${PIPESTATUS[0]}
+          echo "Reward balance exit code: $REWARD_CODE"
 
-          echo "Reward exit code: $REWARD_CODE"
-
-          echo "========== NODE LOG =========="
+          echo "========== FINAL NODE LOG =========="
           tail -n 150 logs/node.log || true
 
-          echo "========== PROCESS CHECK =========="
-          ps aux | grep -E '[a]ioz|[d]epin' || true
+          echo "========== STOPPING NODE =========="
 
-      - name: Upload AIOZ backup
+          if kill -0 "$NODE_PID" 2>/dev/null; then
+            kill "$NODE_PID" || true
+            wait "$NODE_PID" 2>/dev/null || true
+          fi
+
+          echo "Node stopped"
+
+          if [ "$REWARD_CODE" -ne 0 ]; then
+            echo "WARNING: Reward balance command failed"
+          fi
+
+      - name: Upload AIOZ backup and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: aioz-depin-backup
+          name: aioz-depin-40min-backup
           path: |
             privkey.json
             depin-data/
