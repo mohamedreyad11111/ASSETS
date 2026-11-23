@@ -1,5 +1,4 @@
-
-name: AIOZ DePIN Test
+name: Install AIOZ DePIN
 
 on:
   workflow_dispatch:
@@ -10,7 +9,6 @@ permissions:
 jobs:
   install-aioz:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
       - name: Checkout repository
@@ -23,10 +21,8 @@ jobs:
 
       - name: Download AIOZ DePIN
         run: |
-          curl -fL -o aioz-depin.tar.gz \
-            https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
-
-          tar -xzf aioz-depin.tar.gz
+          curl -LO https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
+          tar -xzf aioz-depin-linux-amd64-1.2.6.tar.gz
           mv aioz-depin-cli-linux-amd64 aioz-depin-cli
           chmod +x aioz-depin-cli
 
@@ -34,65 +30,36 @@ jobs:
         run: |
           ./aioz-depin-cli version
 
-      - name: Prepare node key
-        env:
-          AIOZ_KEY: ${{ secrets.AIOZ_PRIVATE_KEY_JSON }}
+      - name: Generate Private Key
         run: |
-          test -n "$AIOZ_KEY" || {
-            echo "AIOZ_PRIVATE_KEY_JSON secret is missing"
-            exit 1
-          }
+          ./aioz-depin-cli keytool new --save-priv-key privkey.json
+          chmod 600 privkey.json
 
-          mkdir -p "$HOME/.aioz"
-          printf '%s' "$AIOZ_KEY" > "$HOME/.aioz/privkey.json"
-          chmod 600 "$HOME/.aioz/privkey.json"
-
-      - name: Start node and monitor
+      - name: Start AIOZ Node
         run: |
-          mkdir -p depin-data logs
-
+          mkdir -p logs
           ./aioz-depin-cli start \
             --home depin-data \
-            --priv-key-file "$HOME/.aioz/privkey.json" \
+            --priv-key-file privkey.json \
             > logs/node.log 2>&1 &
+          echo $! > node.pid
 
-          NODE_PID=$!
-          echo "$NODE_PID" > logs/node.pid
-
-          cleanup() {
-            kill "$NODE_PID" 2>/dev/null || true
-            wait "$NODE_PID" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-
-          for i in $(seq 1 10); do
-            echo "================================"
-            echo "AIOZ status check: minute $i"
-            date -u
-
-            ./aioz-depin-cli stats 2>&1 | tee -a logs/stats.log || true
-
-            echo "Node process:"
-            if kill -0 "$NODE_PID" 2>/dev/null; then
-              echo "RUNNING"
-            else
-              echo "STOPPED"
-              cat logs/node.log
-              exit 1
-            fi
-
-            if [ "$i" -lt 10 ]; then
-              sleep 60
-            fi
+      - name: Monitor Node
+        run: |
+          for i in {1..10}; do
+            echo "===== Minute $i ====="
+            ./aioz-depin-cli stats || true
+            sleep 60
           done
 
-      - name: Save node data and logs
+      - name: Upload Node Files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: aioz-node-test-data
+          name: aioz-depin-backup
           path: |
+            privkey.json
             depin-data/
             logs/
+            node.pid
           retention-days: 7
-          if-no-files-found: warn
