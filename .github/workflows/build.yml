@@ -1,5 +1,5 @@
 
-name: XMRig Docker Build
+name: XMRig and Monero Wallet Build
 
 on:
   workflow_dispatch:
@@ -31,7 +31,8 @@ jobs:
 
       - name: Verify XMRig
         run: |
-          docker run --rm xmrig-test:latest
+          docker run --rm \
+            xmrig-test:latest
 
       - name: Verify Monero Wallet CLI
         run: |
