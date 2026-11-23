@@ -1,8 +1,13 @@
 
-name: XMRig Wallet Test
+name: XMRig Docker Build
 
 on:
   workflow_dispatch:
+
+  push:
+    paths:
+      - Dockerfile
+      - .github/workflows/build.yml
 
 permissions:
   contents: read
@@ -12,16 +17,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Docker
-        run: docker build -t xmrig-test .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build --pull \
+            --progress=plain \
+            -t xmrig-test:latest .
 
       - name: Verify XMRig
-        run: docker run --rm xmrig-test --version
+        run: |
+          docker run --rm xmrig-test:latest
 
-      - name: Verify HashVault TLS
+      - name: Verify Monero Wallet CLI
+        run: |
+          docker run --rm \
+            --entrypoint monero-wallet-cli \
+            xmrig-test:latest \
+            --version
+
+      - name: Test HashVault TLS
         run: |
           timeout 10 openssl s_client \
             -connect pool.hashvault.pro:443 \
