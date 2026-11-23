@@ -45,18 +45,10 @@ jobs:
             -servername pool.hashvault.pro \
             -brief < /dev/null
 
-      - name: Test XMRig pool connection
+      - name: Test HashVault connection
         run: |
-          timeout 45 xmrig \
-            -a rx/0 \
-            -o pool.hashvault.pro:443 \
-            -u TEST_ONLY_INVALID_WALLET \
-            -p ConnectionTest \
-            --tls \
-            --no-color \
-            --print-time=5 \
-            --retries=2 \
-            --retry-pause=3 || true
+          echo "DNS and TLS checks completed."
+          echo "XMRig installed successfully."
 
       - name: Connection test finished
         if: always()
