@@ -1,5 +1,5 @@
 
-name: Install AIOZ DePIN
+name: AIOZ DePIN Node
 
 on:
   workflow_dispatch:
@@ -8,31 +8,63 @@ permissions:
   contents: read
 
 jobs:
-  install-aioz:
-    runs-on: ubuntu-latest
+  aioz-node:
+    runs-on: [self-hosted, linux, aioz-node]
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y curl tar
 
-      - name: Download AIOZ DePIN
+      - name: Install AIOZ CLI
         run: |
-          curl -LO https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
-          tar -xzf aioz-depin-linux-amd64-1.2.6.tar.gz
-          mv aioz-depin-cli-linux-amd64 aioz-depin-cli
-          chmod +x aioz-depin-cli
+          sudo mkdir -p /opt/aioz
+          cd /tmp
 
-      - name: Verify installation
-        run: |
-          ./aioz-depin-cli version
+          curl -fL -o aioz.tar.gz \
+            https://github.com/AIOZNetwork/aioz-depin-cli/releases/download/v1.2.6/aioz-depin-linux-amd64-1.2.6.tar.gz
 
-      - name: Run commands from commands.txt
+          tar -xzf aioz.tar.gz
+
+          sudo install -m 755 \
+            aioz-depin-cli-linux-amd64 \
+            /opt/aioz/aioz-depin-cli
+
+          /opt/aioz/aioz-depin-cli version
+
+      - name: Check wallet
         run: |
-          if [ -f commands.txt ]; then
-            bash -euo pipefail commands.txt
+          if [ ! -f /etc/aioz/privkey.json ]; then
+            echo "Wallet file missing: /etc/aioz/privkey.json"
+            exit 1
           fi
+
+      - name: Configure AIOZ service
+        run: |
+          sudo mkdir -p /var/lib/aioz/depin-data
+
+          sudo tee /etc/systemd/system/aioz-depin.service > /dev/null <<'EOF'
+          [Unit]
+          Description=AIOZ DePIN Node
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/aioz/aioz-depin-cli start --home /var/lib/aioz/depin-data --priv-key-file /etc/aioz/privkey.json
+          Restart=always
+          RestartSec=30
+          RuntimeMaxSec=5h30min
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          sudo systemctl daemon-reload
+          sudo systemctl enable aioz-depin
+          sudo systemctl restart aioz-depin
+
+      - name: Check service
+        run: |
+          sudo systemctl status aioz-depin --no-pager
